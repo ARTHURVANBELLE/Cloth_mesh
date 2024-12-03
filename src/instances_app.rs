@@ -40,6 +40,7 @@ pub struct InstanceApp {
     instances: Vec<Instance>,
     vertices: Vec<Vertex>,
     springs: Vec<Spring>,
+    show_ball: bool,
 }
 
 impl Vertex {
@@ -195,7 +196,7 @@ impl InstanceApp {
                 color: [1.0, 0.0, 0.0], // Red for the ball
                 mass: 0.1,
                 velocity: [0.0, 0.0, 0.0],
-                is_ball: 1, // It's a ball
+                is_ball: 1,
             })
             .collect();
 
@@ -331,6 +332,7 @@ impl InstanceApp {
             instances: ball_instances,
             vertices,
             springs,
+            show_ball: true,
         }
     }
 }
@@ -375,6 +377,21 @@ impl App for InstanceApp {
     fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        
+        /* 
+        if self.show_ball {
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..)); // Ball instances
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.num_instances); // Draw the ball
+        } else {
+            // Only draw cloth mesh, skipping ball instances
+            render_pass.set_vertex_buffer(1, self.vertex_buffer.slice(..)); // Cloth vertices
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..0); // Draw only cloth vertices (skip ball)
+        }
+    
+        render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
+        */
+        
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
