@@ -18,6 +18,7 @@ struct Vertex {
     color: [f32; 3],
     mass: f32,
     velocity: [f32; 3],
+    is_ball: i32,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -64,6 +65,11 @@ impl Vertex {
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x3,
                 },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 6]>() as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Uint32,
+                },
             ],
         }
     }
@@ -84,12 +90,12 @@ impl Instance {
             attributes: &[
                 wgpu::VertexAttribute {
                     offset: 0,
-                    shader_location: 2,
+                    shader_location: 3,
                     format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                    shader_location: 3,
+                    shader_location: 4,
                     format: wgpu::VertexFormat::Float32x3,
                 },
             ],
@@ -116,6 +122,7 @@ impl InstanceApp {
                         color: [0.0, 0.0, 1.0], // Blue for the cloth
                         mass: 0.1,
                         velocity: [0.0, 0.0, 0.0],
+                        is_ball: 0,
                     });
 
                     // Add structural springs
@@ -217,6 +224,7 @@ impl InstanceApp {
                 color: [1.0, 0.0, 0.0], // Red for the ball
                 mass: 0.1,
                 velocity: [0.0, 0.0, 0.0],
+                is_ball: 1,
             })
             .collect();
 
@@ -429,7 +437,7 @@ impl App for InstanceApp {
 
         let input_raw_scroll = input.raw_scroll_delta.y.clone();
         if input_raw_scroll != 0.0 {
-            let new_radius = (self.camera.radius() - input.raw_scroll_delta.y).max(0.1).min(5.0); // Prevent negative or zero radius
+            let new_radius = (self.camera.radius() - input.raw_scroll_delta.y).max(0.1).min(500.0); // Prevent negative or zero radius
             self.camera.set_radius(new_radius).update(context);
         }
     }
@@ -444,101 +452,3 @@ impl App for InstanceApp {
         
     }
 }
-
-
-
-
-/* Given by a good friend */
-
-/*
-impl InstanceApp {
-    pub fn new(context: &Context) -> Self {
-        // Define the shaders (use wgsl include macro)
-        let vertex_shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Vertex Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-
-        let fragment_shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Fragment Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-
-        // Create the pipeline layout, assuming you use bind group layouts
-        let pipeline_layout = context.device().create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: &[&self.camera.bind_group_layout()],
-            push_constant_ranges: &[],
-        });
-
-        // Create the render pipeline manually
-        let render_pipeline = context.device().create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &vertex_shader,
-                entry_point: "main",
-                buffers: &[Vertex::desc(), Instance::desc()],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &fragment_shader,
-                entry_point: "main",
-                targets: &[wgpu::ColorTargetState {
-                    format: context.swap_chain_format(),
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrite::ALL,
-                }],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-        });
-
-        // Other initializations (vertex buffers, index buffers, instances, etc.)
-        let num_indices = indices.len() as u32;
-        let num_ball_instances = ball_instances.len() as u32;
-
-        let vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(vertices.as_slice()),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let instance_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(ball_instances.as_slice()),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
-        let index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(indices.as_slice()),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        // Return the new InstanceApp instance
-        Self {
-            vertex_buffer,
-            instance_buffer,
-            index_buffer,
-            render_pipeline,
-            num_indices,
-            num_instances: num_ball_instances,
-            camera: OrbitCamera::new(context, 1.5, 2.0, 0.1, 5.0),
-            instances: ball_instances,
-            particles: Vec::new(),
-            vertices,
-            springs,
-        }
-    }
-}
-    */

@@ -7,10 +7,11 @@ struct CameraUniform {
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
+    @location(2) is_ball: u32,
 };
 
 struct InstanceInput {
-    @location(2) pos: vec3<f32>,
+    @location(3) pos: vec3<f32>, // Changed to avoid conflict
 };
 
 struct VertexOutput {
@@ -24,7 +25,7 @@ fn vs_main(
     instance: InstanceInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.color = model.color;
+    out.color = select(model.color, vec3<f32>(1.0, 0.0, 0.0), model.is_ball == 1u);
     out.clip_position = camera.proj * camera.view * vec4<f32>(model.position + instance.pos, 1.0);
     return out;
 }
