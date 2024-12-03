@@ -1,3 +1,5 @@
+use std::cmp::max;
+
 use wgpu_bootstrap::{
     cgmath, egui,
     util::{
@@ -26,12 +28,13 @@ struct Spring {
     stiffness: f32,
 }
 
+/*/
 pub struct Particle {
     position: [f32; 3],
     velocity: [f32; 3],
     color: [f32; 3],
 }
-
+*/
 pub struct InstanceApp {
     vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
@@ -41,11 +44,9 @@ pub struct InstanceApp {
     num_instances: u32,
     camera: OrbitCamera,
     instances: Vec<Instance>,
-    particles: Vec<Particle>,
     vertices: Vec<Vertex>,
     springs: Vec<Spring>,
 }
-
 
 impl Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -80,74 +81,173 @@ impl Instance {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Instance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 2,
-                format: wgpu::VertexFormat::Float32x3,
-            },
-            wgpu::VertexAttribute {
-                offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-                shader_location: 3,
-                format: wgpu::VertexFormat::Float32x3,
-            },],
-            
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+            ],
         }
     }
 }
 
 impl InstanceApp {
     pub fn new(context: &Context) -> Self {
-        let (positions, indices) = icosphere(2);
+        // Function to create a cloth mesh (cloth vertices and springs)
+        fn create_cloth_mesh(grid_size: usize, spacing: f32) -> (Vec<Vertex>, Vec<Spring>) {
+            let mut vertices = Vec::new();
+            let mut springs = Vec::new();
+
+            for i in 0..grid_size {
+                for j in 0..grid_size {
+                    let position = [
+                        i as f32 * spacing - (grid_size as f32 * spacing / 2.0),
+                        1.0, // Initial height of the cloth
+                        j as f32 * spacing - (grid_size as f32 * spacing / 2.0),
+                    ];
+                    vertices.push(Vertex {
+                        position,
+                        color: [0.0, 0.0, 1.0], // Blue for the cloth
+                        mass: 0.1,
+                        velocity: [0.0, 0.0, 0.0],
+                    });
+
+                    // Add structural springs
+                    if i > 0 {
+                        springs.push(Spring {
+                            vertex1: i * grid_size + j,
+                            vertex2: (i - 1) * grid_size + j,
+                            rest_length: spacing,
+                            stiffness: 50.0,
+                        });
+                    }
+                    if j > 0 {
+                        springs.push(Spring {
+                            vertex1: i * grid_size + j,
+                            vertex2: i * grid_size + (j - 1),
+                            rest_length: spacing,
+                            stiffness: 50.0,
+                        });
+                    }
+
+                    // Add shear springs
+                    if i > 0 && j > 0 {
+                        springs.push(Spring {
+                            vertex1: i * grid_size + j,
+                            vertex2: (i - 1) * grid_size + (j - 1),
+                            rest_length: (2.0 * spacing * spacing).sqrt(),
+                            stiffness: 50.0,
+                        });
+                        springs.push(Spring {
+                            vertex1: i * grid_size + (j - 1),
+                            vertex2: (i - 1) * grid_size + j,
+                            rest_length: (2.0 * spacing * spacing).sqrt(),
+                            stiffness: 50.0,
+                        });
+                    }
+
+                    // Add bend springs
+                    if i > 1 {
+                        springs.push(Spring {
+                            vertex1: i * grid_size + j,
+                            vertex2: (i - 2) * grid_size + j,
+                            rest_length: 2.0 * spacing,
+                            stiffness: 25.0,
+                        });
+                    }
+                    if j > 1 {
+                        springs.push(Spring {
+                            vertex1: i * grid_size + j,
+                            vertex2: i * grid_size + (j - 2),
+                            rest_length: 2.0 * spacing,
+                            stiffness: 25.0,
+                        });
+                    }
+                }
+            }
+
+            (vertices, springs)
+        }
+
+        // Function to generate cloth indices
+        fn generate_cloth_indices(grid_size: usize) -> Vec<u32> {
+            let mut indices = Vec::new();
+            for i in 0..max(grid_size, 2) - 1 {
+                for j in 0..grid_size - 1 {
+                    let top_left = (i * grid_size + j) as u32;
+                    let top_right = top_left + 1;
+                    let bottom_left = ((i + 1) * grid_size + j) as u32;
+                    let bottom_right = bottom_left + 1;
+
+                    // Add two triangles for the quad
+                    indices.push(top_left);
+                    indices.push(bottom_left);
+                    indices.push(top_right);
+
+                    indices.push(top_right);
+                    indices.push(bottom_left);
+                    indices.push(bottom_right);
+                }
+            }
+            indices
+        }
+
+        // Generate positions and indices for the ball
+        let (ball_positions, ball_indices) = icosphere(2);
         let mut rng = rand::thread_rng();
 
+        // Cloth parameters
         let grid_size = 10;
         let spacing = 0.1;
 
-        let vertices: Vec<Vertex> = positions
+        // Generate cloth vertices and springs
+        let (cloth_vertices, cloth_springs) = create_cloth_mesh(grid_size, spacing);
+
+        // Generate ball vertices
+        let ball_vertices: Vec<Vertex> = ball_positions
             .iter()
             .map(|position| Vertex {
                 position: (*position * 0.2).into(),
-                color: [1.0, 0.0, 0.0],
+                color: [1.0, 0.0, 0.0], // Red for the ball
                 mass: 0.1,
                 velocity: [0.0, 0.0, 0.0],
             })
             .collect();
 
-        let mut springs: Vec<Spring> = (0..grid_size)
-            .flat_map(|i| {
-                (0..grid_size).map(move |j| {
-                    let vertex1 = i * grid_size + j;
-                    let vertex2 = i * grid_size + j + 1;
-                    Spring {
-                        vertex1,
-                        vertex2,
-                        rest_length: spacing,
-                        stiffness: 0.1,
-                    }
-                })
-            })
-            .chain((0..grid_size).flat_map(|j| {
-                (0..grid_size).map(move |i| {
-                    let vertex1 = i * grid_size + j;
-                    let vertex2 = (i + 1) * grid_size + j;
-                    Spring {
-                        vertex1,
-                        vertex2,
-                        rest_length: spacing,
-                        stiffness: 0.1,
-                    }
-                })
-            }))
-            .collect();
+        // Generate cloth indices
+        let cloth_indices = generate_cloth_indices(grid_size);
 
-        let particles: Vec<Particle> = (0..6) // Generate 100 particles
-            .map(|_| Particle {
-                position: [rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0)],
-                velocity: [rng.gen_range(-0.1..0.1), rng.gen_range(-0.1..0.1), rng.gen_range(-0.1..0.1)],
-                color: [rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0)],
+        // Combine cloth and ball vertices, springs, and indices
+        let mut vertices = ball_vertices;
+        vertices.extend(cloth_vertices);
+
+        let mut springs = cloth_springs;
+        let mut indices = cloth_indices;
+        indices.extend(ball_indices);
+
+        // Create ball instances (for physics simulation)
+        let ball_instances: Vec<Instance> = ball_positions
+            .iter()
+            .map(|position| Instance {
+                position: (*position).into(),
+                velocity: [
+                    rng.gen_range(-0.1..0.1),
+                    rng.gen_range(-0.1..0.1),
+                    rng.gen_range(-0.1..0.1),
+                ],
             })
             .collect();
 
+        let num_indices = indices.len() as u32;
+        let num_ball_instances = ball_instances.len() as u32;
+
+        // Buffers for vertex, instance, and index data
         let index_buffer = context
             .device()
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -156,39 +256,21 @@ impl InstanceApp {
                 usage: wgpu::BufferUsages::INDEX,
             });
 
-        let mut rng = rand::thread_rng(); // Add this line
-        let instances: Vec<Instance> = positions
-            .iter()
-            .map(|position| Instance {
-                position: (*position).into(),
-                velocity: [
-                    rng.gen_range(-0.1..0.1), // Modify this line
-                    rng.gen_range(-0.1..0.1), // Modify this line
-                    rng.gen_range(-0.1..0.1), // Modify this line
-                ],
-            })
-            .collect();
+        let vertex_buffer = context
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(vertices.as_slice()),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
 
-        //let num_indices = indices.len() as u32;
-        //let num_instances = instances.len() as u32;
-
-        let vertex_buffer =
-            context
-                .device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Buffer"),
-                    contents: bytemuck::cast_slice(vertices.as_slice()),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-
-        let instance_buffer =
-            context
-                .device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Instance Buffer"),
-                    contents: bytemuck::cast_slice(instances.as_slice()),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
+        let instance_buffer = context
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(ball_instances.as_slice()),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
 
         let shader = context
             .device()
@@ -211,132 +293,69 @@ impl InstanceApp {
                 });
 
         let render_pipeline =
-            context
-                .device()
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Render Pipeline"),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: "vs_main",
-                        buffers: &[Vertex::desc(), Instance::desc()],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: "fs_main",
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: context.format(),
-                            blend: Some(wgpu::BlendState::REPLACE),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        strip_index_format: None,
-                        front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: Some(wgpu::Face::Back),
-                        // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                        polygon_mode: wgpu::PolygonMode::Fill,
-                        // Requires Features::DEPTH_CLIP_CONTROL
-                        unclipped_depth: false,
-                        // Requires Features::CONSERVATIVE_RASTERIZATION
-                        conservative: false,
-                    },
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: context.depth_stencil_format(),
-                        depth_write_enabled: true,
-                        depth_compare: wgpu::CompareFunction::Less,
-                        stencil: wgpu::StencilState::default(),
-                        bias: wgpu::DepthBiasState::default(),
-                    }),
-                    multisample: wgpu::MultisampleState {
-                        count: 1,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
-                    multiview: None,
-                    cache: None,
-                });
-
-        let aspect = context.size().x / context.size().y;
-        //let camera = OrbitCamera::new(context, 45.0, aspect, 0.1, 100.0);
-
-        // Create structural springs
-        for i in 0..grid_size {
-            for j in 0..grid_size {
-                if i < grid_size - 1 {
-                    springs.push(Spring {
-                        vertex1: i * grid_size + j,
-                        vertex2: (i + 1) * grid_size + j,
-                        rest_length: spacing,
-                        stiffness: 100.0,
-                    });
-                }
-                if j < grid_size - 1 {
-                    springs.push(Spring {
-                        vertex1: i * grid_size + j,
-                        vertex2: i * grid_size + (j + 1),
-                        rest_length: spacing,
-                        stiffness: 100.0,
-                    });
-                }
-            }
-        }
-        // Create shear springs
-        for i in 0..grid_size - 1 {
-            for j in 0..grid_size - 1 {
-                springs.push(Spring {
-                    vertex1: i * grid_size + j,
-                    vertex2: (i + 1) * grid_size + (j + 1),
-                    rest_length: (2.0 * spacing * spacing).sqrt(),
-                    stiffness: 100.0,
-                });
-                springs.push(Spring {
-                    vertex1: (i + 1) * grid_size + j,
-                    vertex2: i * grid_size + (j + 1),
-                    rest_length: (2.0 * spacing * spacing).sqrt(),
-                    stiffness: 100.0,
-                });
-            }
-        }
-        // Create bend springs
-        for i in 0..grid_size {
-            for j in 0..grid_size {
-                if i < grid_size - 2 {
-                    springs.push(Spring {
-                        vertex1: i * grid_size + j,
-                        vertex2: (i + 2) * grid_size + j,
-                        rest_length: 2.0 * spacing,
-                        stiffness: 50.0,
-                    });
-                }
-                if j < grid_size - 2 {
-                    springs.push(Spring {
-                        vertex1: i * grid_size + j,
-                        vertex2: i * grid_size + (j + 2),
-                        rest_length: 2.0 * spacing,
-                        stiffness: 50.0,
-                    });
-                }
-            }
-        }
+        context
+            .device()
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Render Pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[Vertex::desc(), Instance::desc()],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: context.format(),
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    // Requires Features::DEPTH_CLIP_CONTROL
+                    unclipped_depth: false,
+                    // Requires Features::CONSERVATIVE_RASTERIZATION
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: context.depth_stencil_format(),
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+                cache: None,
+            });
 
         Self {
             vertex_buffer,
             instance_buffer,
             index_buffer,
             render_pipeline,
-            num_indices: indices.len() as u32,
-            num_instances: 1, // Set the number of instances
-            camera: OrbitCamera::new(context, 45.0, aspect, 0.4, 100.0),
-            instances: vec![], // Initialize instances
-            particles, // Initialize particles
+            num_indices,
+            num_instances: num_ball_instances,
+            camera: OrbitCamera::new(context, 1.5, 2.0, 0.1, 5.0),
+            instances: ball_instances,
             vertices,
             springs,
-            }
+        }
     }
+
     fn update_instances(&mut self, context: &Context) {
 
         for instance in &mut self.instances {
@@ -382,7 +401,7 @@ impl InstanceApp {
                     v2[1] - v1[1],
                     v2[2] - v1[2],
                 ];
-                let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt();
+                let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt().max(1e-6);
                 let force_magnitude = spring.stiffness * (distance - spring.rest_length);
                 for i in 0..3 {
                     force[i] += force_magnitude * delta[i] / distance;
@@ -403,6 +422,7 @@ impl InstanceApp {
     }
 }
 
+
 impl App for InstanceApp {
     fn input(&mut self, input: egui::InputState, context: &Context) {
         self.camera.input(input.clone(), context);
@@ -421,5 +441,104 @@ impl App for InstanceApp {
         render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
         render_pass.draw_indexed(0..self.num_indices, 0, 0..self.num_instances);
+        
     }
 }
+
+
+
+
+/* Given by a good friend */
+
+/*
+impl InstanceApp {
+    pub fn new(context: &Context) -> Self {
+        // Define the shaders (use wgsl include macro)
+        let vertex_shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Vertex Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        let fragment_shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Fragment Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        // Create the pipeline layout, assuming you use bind group layouts
+        let pipeline_layout = context.device().create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            bind_group_layouts: &[&self.camera.bind_group_layout()],
+            push_constant_ranges: &[],
+        });
+
+        // Create the render pipeline manually
+        let render_pipeline = context.device().create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vertex_shader,
+                entry_point: "main",
+                buffers: &[Vertex::desc(), Instance::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &fragment_shader,
+                entry_point: "main",
+                targets: &[wgpu::ColorTargetState {
+                    format: context.swap_chain_format(),
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrite::ALL,
+                }],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+        });
+
+        // Other initializations (vertex buffers, index buffers, instances, etc.)
+        let num_indices = indices.len() as u32;
+        let num_ball_instances = ball_instances.len() as u32;
+
+        let vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(vertices.as_slice()),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let instance_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(ball_instances.as_slice()),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(indices.as_slice()),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // Return the new InstanceApp instance
+        Self {
+            vertex_buffer,
+            instance_buffer,
+            index_buffer,
+            render_pipeline,
+            num_indices,
+            num_instances: num_ball_instances,
+            camera: OrbitCamera::new(context, 1.5, 2.0, 0.1, 5.0),
+            instances: ball_instances,
+            particles: Vec::new(),
+            vertices,
+            springs,
+        }
+    }
+}
+    */
