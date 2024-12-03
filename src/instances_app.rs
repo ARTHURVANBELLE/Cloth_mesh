@@ -29,13 +29,6 @@ struct Spring {
     stiffness: f32,
 }
 
-/*/
-pub struct Particle {
-    position: [f32; 3],
-    velocity: [f32; 3],
-    color: [f32; 3],
-}
-*/
 pub struct InstanceApp {
     vertex_buffer: wgpu::Buffer,
     instance_buffer: wgpu::Buffer,
@@ -105,11 +98,12 @@ impl Instance {
 
 impl InstanceApp {
     pub fn new(context: &Context) -> Self {
-        // Function to create a cloth mesh (cloth vertices and springs)
+        // Function to create cloth mesh (cloth vertices and springs)
         fn create_cloth_mesh(grid_size: usize, spacing: f32) -> (Vec<Vertex>, Vec<Spring>) {
             let mut vertices = Vec::new();
             let mut springs = Vec::new();
 
+            // Generate cloth vertices and springs
             for i in 0..grid_size {
                 for j in 0..grid_size {
                     let position = [
@@ -117,15 +111,17 @@ impl InstanceApp {
                         1.0, // Initial height of the cloth
                         j as f32 * spacing - (grid_size as f32 * spacing / 2.0),
                     ];
+
+                    // Add cloth vertex (with blue color)
                     vertices.push(Vertex {
                         position,
                         color: [0.0, 0.0, 1.0], // Blue for the cloth
                         mass: 0.1,
                         velocity: [0.0, 0.0, 0.0],
-                        is_ball: 0,
+                        is_ball: 0, // Not a ball
                     });
 
-                    // Add structural springs
+                    // Add springs connecting adjacent vertices
                     if i > 0 {
                         springs.push(Spring {
                             vertex1: i * grid_size + j,
@@ -143,7 +139,7 @@ impl InstanceApp {
                         });
                     }
 
-                    // Add shear springs
+                    // Shear springs
                     if i > 0 && j > 0 {
                         springs.push(Spring {
                             vertex1: i * grid_size + j,
@@ -159,7 +155,7 @@ impl InstanceApp {
                         });
                     }
 
-                    // Add bend springs
+                    // Bend springs
                     if i > 1 {
                         springs.push(Spring {
                             vertex1: i * grid_size + j,
@@ -182,41 +178,16 @@ impl InstanceApp {
             (vertices, springs)
         }
 
-        // Function to generate cloth indices
-        fn generate_cloth_indices(grid_size: usize) -> Vec<u32> {
-            let mut indices = Vec::new();
-            for i in 0..max(grid_size, 2) - 1 {
-                for j in 0..grid_size - 1 {
-                    let top_left = (i * grid_size + j) as u32;
-                    let top_right = top_left + 1;
-                    let bottom_left = ((i + 1) * grid_size + j) as u32;
-                    let bottom_right = bottom_left + 1;
+        // Create ball and cloth mesh
+        let grid_size = 10;
+        let spacing = 0.1;
+        let (cloth_vertices, cloth_springs) = create_cloth_mesh(grid_size, spacing);
 
-                    // Add two triangles for the quad
-                    indices.push(top_left);
-                    indices.push(bottom_left);
-                    indices.push(top_right);
-
-                    indices.push(top_right);
-                    indices.push(bottom_left);
-                    indices.push(bottom_right);
-                }
-            }
-            indices
-        }
-
-        // Generate positions and indices for the ball
+        // Generate the ball shape (icosphere)
         let (ball_positions, ball_indices) = icosphere(2);
         let mut rng = rand::thread_rng();
 
-        // Cloth parameters
-        let grid_size = 10;
-        let spacing = 0.1;
-
-        // Generate cloth vertices and springs
-        let (cloth_vertices, cloth_springs) = create_cloth_mesh(grid_size, spacing);
-
-        // Generate ball vertices
+        // Create ball vertices (red color)
         let ball_vertices: Vec<Vertex> = ball_positions
             .iter()
             .map(|position| Vertex {
@@ -224,22 +195,21 @@ impl InstanceApp {
                 color: [1.0, 0.0, 0.0], // Red for the ball
                 mass: 0.1,
                 velocity: [0.0, 0.0, 0.0],
-                is_ball: 1,
+                is_ball: 1, // It's a ball
             })
             .collect();
 
-        // Generate cloth indices
-        let cloth_indices = generate_cloth_indices(grid_size);
-
-        // Combine cloth and ball vertices, springs, and indices
+        // Combine ball and cloth vertices
         let mut vertices = ball_vertices;
         vertices.extend(cloth_vertices);
 
+        // Combine ball and cloth springs (only springs for the cloth mesh in this case)
         let mut springs = cloth_springs;
-        let mut indices = cloth_indices;
-        indices.extend(ball_indices);
+        
+        // Generate cloth indices (for rendering)
+        let cloth_indices = generate_cloth_indices(grid_size);
 
-        // Create ball instances (for physics simulation)
+        // Create instances for ball positions
         let ball_instances: Vec<Instance> = ball_positions
             .iter()
             .map(|position| Instance {
@@ -252,15 +222,12 @@ impl InstanceApp {
             })
             .collect();
 
-        let num_indices = indices.len() as u32;
-        let num_ball_instances = ball_instances.len() as u32;
-
         // Buffers for vertex, instance, and index data
         let index_buffer = context
             .device()
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(indices.as_slice()),
+                contents: bytemuck::cast_slice(cloth_indices.as_slice()),
                 usage: wgpu::BufferUsages::INDEX,
             });
 
@@ -279,157 +246,120 @@ impl InstanceApp {
                 contents: bytemuck::cast_slice(ball_instances.as_slice()),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-
+        
         let shader = context
-            .device()
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-            });
+        .device()
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
 
         let camera_bind_group_layout = context
             .device()
             .create_bind_group_layout(&CameraUniform::desc());
 
         let pipeline_layout =
-            context
-                .device()
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Render Pipeline Layout"),
-                    bind_group_layouts: &[&camera_bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-
-        let render_pipeline =
         context
             .device()
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Render Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[Vertex::desc(), Instance::desc()],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: context.format(),
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
-                    // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    // Requires Features::DEPTH_CLIP_CONTROL
-                    unclipped_depth: false,
-                    // Requires Features::CONSERVATIVE_RASTERIZATION
-                    conservative: false,
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: context.depth_stencil_format(),
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-                cache: None,
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[&camera_bind_group_layout],
+                push_constant_ranges: &[],
             });
 
-        Self {
+        // Create render pipeline
+        let render_pipeline =
+            context
+                .device()
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Render Pipeline"),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: "vs_main",
+                        buffers: &[Vertex::desc(), Instance::desc()],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: "fs_main",
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: context.format(),
+                            blend: Some(wgpu::BlendState::REPLACE),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: Some(wgpu::Face::Back),
+                        // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        // Requires Features::DEPTH_CLIP_CONTROL
+                        unclipped_depth: false,
+                        // Requires Features::CONSERVATIVE_RASTERIZATION
+                        conservative: false,
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: context.depth_stencil_format(),
+                        depth_write_enabled: true,
+                        depth_compare: wgpu::CompareFunction::Less,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: 1,
+                        mask: !0,
+                        alpha_to_coverage_enabled: false,
+                    },
+                    multiview: None,
+                    cache: None,
+                });
+        
+        let aspect = context.size().x / context.size().y;
+        // Return instance app
+        InstanceApp {
             vertex_buffer,
             instance_buffer,
             index_buffer,
             render_pipeline,
-            num_indices,
-            num_instances: num_ball_instances,
-            camera: OrbitCamera::new(context, 1.5, 2.0, 0.1, 5.0),
+            num_indices: cloth_indices.len() as u32,
+            num_instances: ball_instances.len() as u32,
+            camera: OrbitCamera::new(context, 45.0, aspect, 0.1, 100.0),
             instances: ball_instances,
             vertices,
             springs,
         }
     }
-
-    fn update_instances(&mut self, context: &Context) {
-
-        for instance in &mut self.instances {
-            for i in 0..3 {
-                instance.position[i] += instance.velocity[i];
-            }
-        }
-
-        self.instance_buffer = context
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(self.instances.as_slice()),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-    }
-
-    pub fn update(mut self, context: &Context) {
-        self.camera.update(context);
-        self.update_instances(context); // Add this line
-    }
-
-    fn calculate_forces(&mut self) {
-        let gravity = [0.0, -9.81, 0.0];
-        let damping = 0.99;
-
-        let positions: Vec<[f32; 3]> = self.vertices.iter().map(|v| v.position).collect();
-
-        for vertex in &mut self.vertices {
-            let mut force = [0.0, 0.0, 0.0];
-
-            // Apply gravity
-            for i in 0..3 {
-                force[i] += vertex.mass * gravity[i];
-            }
-
-            // Apply spring forces
-            for spring in &self.springs {
-                let v1 = positions[spring.vertex1];
-                let v2 = positions[spring.vertex2];
-                let delta = [
-                    v2[0] - v1[0],
-                    v2[1] - v1[1],
-                    v2[2] - v1[2],
-                ];
-                let distance = (delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2]).sqrt().max(1e-6);
-                let force_magnitude = spring.stiffness * (distance - spring.rest_length);
-                for i in 0..3 {
-                    force[i] += force_magnitude * delta[i] / distance;
-                }
-            }
-
-            // Apply damping
-            for i in 0..3 {
-                vertex.velocity[i] *= damping;
-            }
-
-            // Update velocity and position
-            for i in 0..3 {
-                vertex.velocity[i] += force[i] / vertex.mass;
-                vertex.position[i] += vertex.velocity[i];
-            }
-        }
-    }
 }
 
+
+fn generate_cloth_indices(grid_size: usize) -> Vec<u32> {
+    let mut indices = Vec::new();
+
+    // Loop over grid to create indices for the cloth mesh
+    for i in 0..grid_size - 1 {
+        for j in 0..grid_size - 1 {
+            let current = i * grid_size + j;
+            let right = current + 1;
+            let down = current + grid_size;
+            let down_right = down + 1;
+
+            // Create two triangles per square in the grid
+            indices.push(current as u32);
+            indices.push(down as u32);
+            indices.push(right as u32);
+
+            indices.push(right as u32);
+            indices.push(down as u32);
+            indices.push(down_right as u32);
+        }
+    }
+
+    indices
+}
 
 impl App for InstanceApp {
     fn input(&mut self, input: egui::InputState, context: &Context) {
