@@ -9,7 +9,6 @@ use wgpu_bootstrap::{
     wgpu::{self, util::DeviceExt},
     App, Context,
 };
-use rand::Rng;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -102,42 +101,53 @@ impl Instance {
 }
 
 pub struct InstanceApp {
-    vertex_buffer: wgpu::Buffer,
-    instance_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
+    sphere_vertex_buffer: wgpu::Buffer,
+    sphere_index_buffer: wgpu::Buffer,
+    fabric_vertex_buffer: wgpu::Buffer,
+    fabric_index_buffer: wgpu::Buffer,
     render_pipeline: wgpu::RenderPipeline,
-    num_indices: u32,
+    num_sphere_indices: u32,
+    num_fabric_indices: u32,
     num_instances: u32,
     camera: OrbitCamera,
     instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
 }
 
 impl InstanceApp {
     pub fn new(context: &Context) -> Self {
-        // Ball vertices (generated with icosphere)
-        let (ball_positions, ball_indices) = icosphere(2);
+        
 
+        let rows = 20;
+        let cols = 20;
+        let spacing = 0.5;
+        let stiffness = 100.0;
+
+        let ball_radius = 0.2; // Adjust the ball radius as needed
+        let (ball_positions, ball_indices) = icosphere(2);
         let ball_vertices: Vec<Vertex> = ball_positions
             .iter()
             .map(|position| Vertex {
-                position: (*position * 0.2).into(),
+                position: (*position * ball_radius).into(),
                 color: [1.0, 0.0, 0.0], // Red for the ball
-                mass: 1.0,               // Set a small mass
-                velocity: [0.0, 0.0, 0.0], // Starting with zero velocity
+                mass: 1.0,
+                velocity: [0.0, 0.0, 0.0],
                 is_ball: 1.0,
             })
             .collect();
+        
+        let fabric_vertices = create_fabric_vertices(rows, cols, spacing, ball_radius);
 
-        fn create_fabric_vertices(rows: usize, cols: usize, spacing: f32) -> Vec<Vertex> {
+
+        fn create_fabric_vertices(rows: usize, cols: usize, spacing: f32, ball_radius: f32) -> Vec<Vertex> {
             let mut vertices = Vec::new();
             for i in 0..rows {
                 for j in 0..cols {
+                    let x = -ball_radius + j as f32 * spacing;
+                    let z = -ball_radius + i as f32 * spacing;
+                    let y = ball_radius + 0.1; // Slightly above the ball
                     vertices.push(Vertex {
-                        position: [
-                            -0.4 + j as f32 * spacing,
-                             0.2,
-                            -0.4 + i as f32 * spacing,
-                        ], // Center the fabric on top of the sphere
+                        position: [x, y, z],
                         color: [0.0, 1.0, 0.0], // Green color
                         mass: 1.0,
                         velocity: [0.0, 0.0, 0.0],
@@ -254,53 +264,62 @@ impl InstanceApp {
         }
         
         
-        let rows = 10;
-        let cols = 10;
-        let spacing = 0.1;
-        let stiffness = 100.0;
 
         // Generate fabric vertices and indices
-        let fabric_vertices = create_fabric_vertices(rows, cols, spacing);
-        let fabric_indices = generate_fabric_indices(cols - 1, rows - 1); // Use `cols - 1` and `rows - 1` for grid cells
+        let fabric_indices = generate_fabric_indices(cols - 1, rows - 1);
+        println!("Total fabric vertices: {}", fabric_vertices.len());
+        println!("Total fabric indices: {}", fabric_indices.len());
 
         // Combine vertices and indices for rendering
         let mut vertices = Vec::new();
         vertices.extend(&ball_vertices); // Borrow instead of moving
-        vertices.extend(fabric_vertices);
+        vertices.extend(fabric_vertices.clone());
         
         let mut indices = Vec::new();
-        indices.extend(ball_indices); // Borrow if possible
+        indices.extend(ball_indices.clone()); // Clone to avoid move
         indices.extend(fabric_indices.iter().map(|i| *i as u32 + ball_vertices.len() as u32));
+
 
         println!("Total vertices: {}", vertices.len());
         println!("Total indices: {}", indices.len());
 
         // Instances for square (initial position and downward velocity)
         let instances = vec![Instance {
-            position: [0.0, 1.0, 0.0],
-            velocity: [0.0, -0.02, 0.0],
+            position: [0.0, 0.0, 0.0],
+            velocity: [0.0, 0.0, 0.0],
         }];
 
-        // Buffers
-        let vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices), // `vertices` is your `Vertex` array
+        let instance_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: &[],
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+        
+        
+        let sphere_vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sphere Vertex Buffer"),
+            contents: bytemuck::cast_slice(&ball_vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-
-        let index_buffer = context
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-
-            let instance_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&instances), // `instances` is your `Instance` array
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+        
+        let sphere_index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Sphere Index Buffer"),
+            contents: bytemuck::cast_slice(&ball_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        
+        let fabric_vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Fabric Vertex Buffer"),
+            contents: bytemuck::cast_slice(&fabric_vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        
+        let fabric_index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Fabric Index Buffer"),
+            contents: bytemuck::cast_slice(&fabric_indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        
 
         // Shaders and pipeline
         let shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -344,11 +363,8 @@ impl InstanceApp {
                         strip_index_format: None,
                         front_face: wgpu::FrontFace::Ccw,
                         cull_mode: Some(wgpu::Face::Back),
-                        // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
                         polygon_mode: wgpu::PolygonMode::Fill,
-                        // Requires Features::DEPTH_CLIP_CONTROL
                         unclipped_depth: false,
-                        // Requires Features::CONSERVATIVE_RASTERIZATION
                         conservative: false,
                     },
                     depth_stencil: Some(wgpu::DepthStencilState {
@@ -372,16 +388,23 @@ impl InstanceApp {
         let aspect = context.size().x / context.size().y;
         let camera = OrbitCamera::new(context, 45.0, aspect, 0.1, 10.0);
 
+        let num_sphere_indices = ball_indices.len() as u32;
+        let num_fabric_indices = fabric_indices.len() as u32;
+
         InstanceApp {
-            vertex_buffer,
-            instance_buffer,
-            index_buffer,
+            sphere_vertex_buffer,
+            sphere_index_buffer,
+            fabric_vertex_buffer,
+            fabric_index_buffer,
             render_pipeline,
-            num_indices: indices.len() as u32,
+            num_sphere_indices,
+            num_fabric_indices,
             num_instances: instances.len() as u32,
             camera,
             instances,
+            instance_buffer,
         }
+        
     }
 }
 
@@ -397,7 +420,8 @@ impl App for InstanceApp {
 
     fn update(&mut self, delta_time: f32, _context: &wgpu_bootstrap::Context<'_>) {
         for instance in &mut self.instances {
-            // Skip sphere instances (is_ball == 1.0)
+            // Update fabric instances (velocity[1] != 0.0) and leave spheres unaffected
+
             if instance.velocity[1] != 0.0 {
                 // Update position based on velocity
                 instance.position[1] += instance.velocity[1] * delta_time;
@@ -412,8 +436,6 @@ impl App for InstanceApp {
                 }
             }
         }
-    
-        // Update instance buffer to reflect changes
         let instance_data: Vec<Instance> = self.instances.iter().cloned().collect();
         self.instance_buffer = _context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
@@ -422,16 +444,26 @@ impl App for InstanceApp {
         });
     }
     
-    
-    
-    
 
     fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
         render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..self.num_instances);
+    
+        // Draw the sphere
+        //render_pass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+
+        render_pass.set_index_buffer(self.sphere_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.num_sphere_indices, 0, 0..self.num_instances);
+    
+        // Draw the fabric
+        //render_pass.set_vertex_buffer(0, self.fabric_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+
+        render_pass.set_index_buffer(self.fabric_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.num_fabric_indices, 0, 0..self.num_instances);
     }
+    
+    
 }
