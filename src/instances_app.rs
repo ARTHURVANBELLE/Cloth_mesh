@@ -121,35 +121,34 @@ impl InstanceApp {
         // Square vertices
         let square_vertices = vec![
             Vertex {
-                position: [-0.2, 0.2, 0.0],
-                color: [0.0, 1.0, 0.0], // Green square
-                mass: 1.0,               // Set a small mass
-                velocity: [0.0, 0.0, 0.0], // Starting with zero velocity
+                position: [-0.4, 0.2, -0.4],
+                color: [0.0, 1.0, 0.0],
+                mass: 1.0,
+                velocity: [0.0, 0.0, 0.0],
                 is_ball: 0.0,
             },
             Vertex {
-                position: [0.2, 0.2, 0.0],
+                position: [0.4, 0.2, -0.4],
                 color: [0.0, 1.0, 0.0],
-                mass: 1.0,               // Set mass for the second vertex
-                velocity: [0.0, 0.0, 0.0], // Zero initial velocity
+                mass: 1.0,
+                velocity: [0.0, 0.0, 0.0],
                 is_ball: 0.0,
             },
             Vertex {
-                position: [0.2, -0.2, 0.0],
+                position: [0.4, 0.2, 0.4],
                 color: [0.0, 1.0, 0.0],
-                mass: 1.0,               // Set mass for the third vertex
-                velocity: [0.0, 0.0, 0.0], // Zero initial velocity
+                mass: 1.0,
+                velocity: [0.0, 0.0, 0.0],
                 is_ball: 0.0,
             },
             Vertex {
-                position: [-0.2, -0.2, 0.0],
+                position: [-0.4, 0.2, 0.4],
                 color: [0.0, 1.0, 0.0],
-                mass: 1.0,               // Set mass for the fourth vertex
-                velocity: [0.0, 0.0, 0.0], // Zero initial velocity
+                mass: 1.0,
+                velocity: [0.0, 0.0, 0.0],
                 is_ball: 0.0,
             },
         ];
-            
 
 
         let square_indices = vec![0, 1, 2, 0, 2, 3];
@@ -256,7 +255,7 @@ impl InstanceApp {
                 
         // Camera setup
         let aspect = context.size().x / context.size().y;
-        let camera = OrbitCamera::new(context, 45.0, aspect, 0.1, 100.0);
+        let camera = OrbitCamera::new(context, 45.0, aspect, 0.1, 10.0);
 
         InstanceApp {
             vertex_buffer,
