@@ -1,5 +1,3 @@
-use std::cmp::max;
-
 use wgpu_bootstrap::{
     cgmath, egui,
     util::{
@@ -118,9 +116,8 @@ impl InstanceApp {
     pub fn new(context: &Context) -> Self {
         
 
-        let rows = 20;
-        let cols = 20;
-        let spacing = 0.5;
+        let rows = 200;
+        let cols = 200;
         let stiffness = 100.0;
 
         let ball_radius = 0.2; // Adjust the ball radius as needed
@@ -136,19 +133,21 @@ impl InstanceApp {
             })
             .collect();
         
-        let fabric_vertices = create_fabric_vertices(rows, cols, spacing, ball_radius);
+        let fabric_vertices = create_fabric_vertices(rows, cols, ball_radius);
 
 
-        fn create_fabric_vertices(rows: usize, cols: usize, spacing: f32, ball_radius: f32) -> Vec<Vertex> {
+        fn create_fabric_vertices(rows: usize, cols: usize, ball_radius: f32) -> Vec<Vertex> {
             let mut vertices = Vec::new();
+            let spacing = 4.0 * ball_radius / cols as f32; // Adjust spacing as needed
+            let y = ball_radius + spacing * rows as f32 / 2.0; // Center fabric above the sphere
+        
             for i in 0..rows {
                 for j in 0..cols {
-                    let x = -ball_radius + j as f32 * spacing;
-                    let z = -ball_radius + i as f32 * spacing;
-                    let y = ball_radius + 0.1; // Slightly above the ball
+                    let x = -spacing * (cols as f32 - 1.0) / 2.0 + j as f32 * spacing; // Center horizontally
+                    let z = -spacing * (rows as f32 - 1.0) / 2.0 + i as f32 * spacing;
                     vertices.push(Vertex {
                         position: [x, y, z],
-                        color: [0.0, 1.0, 0.0], // Green color
+                        color: [0.0, 1.0, 0.0], // Green for the fabric
                         mass: 1.0,
                         velocity: [0.0, 0.0, 0.0],
                         is_ball: 0.0,
@@ -157,6 +156,7 @@ impl InstanceApp {
             }
             vertices
         }
+        
         
 
         fn create_springs(
@@ -362,7 +362,7 @@ impl InstanceApp {
                         topology: wgpu::PrimitiveTopology::TriangleList,
                         strip_index_format: None,
                         front_face: wgpu::FrontFace::Ccw,
-                        cull_mode: Some(wgpu::Face::Back),
+                        cull_mode: None,//Some(wgpu::Face::Back),
                         polygon_mode: wgpu::PolygonMode::Fill,
                         unclipped_depth: false,
                         conservative: false,
@@ -390,6 +390,7 @@ impl InstanceApp {
 
         let num_sphere_indices = ball_indices.len() as u32;
         let num_fabric_indices = fabric_indices.len() as u32;
+        let num_ball_vertices = ball_vertices.len();
 
         InstanceApp {
             sphere_vertex_buffer,
@@ -450,7 +451,7 @@ impl App for InstanceApp {
         render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
     
         // Draw the sphere
-        //render_pass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
 
@@ -458,7 +459,7 @@ impl App for InstanceApp {
         render_pass.draw_indexed(0..self.num_sphere_indices, 0, 0..self.num_instances);
     
         // Draw the fabric
-        //render_pass.set_vertex_buffer(0, self.fabric_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(0, self.fabric_vertex_buffer.slice(..));
         render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
         render_pass.set_index_buffer(self.fabric_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
