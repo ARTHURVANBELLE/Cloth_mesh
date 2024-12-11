@@ -36,12 +36,16 @@ fn vs_main(
     
     // Color selection based on `is_ball` (1 for ball, else default)
     out.color = select(model.color, vec3<f32>(1.0, 0.0, 0.0), model.is_ball == 1.0);
-    
+
+    // Make sphere static
+    let instance_position = select(instance.position, vec3<f32>(0.0, 0.0, 0.0), model.is_ball == 1.0);
+
     // Compute the clip position (model + instance position, with camera projection)
-    out.clip_position = camera.proj * camera.view * vec4<f32>(model.position + instance.position, 1.0);
+    out.clip_position = camera.proj * camera.view * vec4<f32>(model.position + instance_position, 1.0);
     
     return out;
 }
+
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {

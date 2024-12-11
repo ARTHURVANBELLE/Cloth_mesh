@@ -28,6 +28,16 @@ struct Instance {
     velocity: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Spring {
+    vertex_a: usize,
+    vertex_b: usize,
+    rest_length: f32,
+    stiffness: f32,
+}
+
+
 impl Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -118,47 +128,152 @@ impl InstanceApp {
             })
             .collect();
 
-        // Square vertices
-        let square_vertices = vec![
-            Vertex {
-                position: [-0.4, 0.2, -0.4],
-                color: [0.0, 1.0, 0.0],
-                mass: 1.0,
-                velocity: [0.0, 0.0, 0.0],
-                is_ball: 0.0,
-            },
-            Vertex {
-                position: [0.4, 0.2, -0.4],
-                color: [0.0, 1.0, 0.0],
-                mass: 1.0,
-                velocity: [0.0, 0.0, 0.0],
-                is_ball: 0.0,
-            },
-            Vertex {
-                position: [0.4, 0.2, 0.4],
-                color: [0.0, 1.0, 0.0],
-                mass: 1.0,
-                velocity: [0.0, 0.0, 0.0],
-                is_ball: 0.0,
-            },
-            Vertex {
-                position: [-0.4, 0.2, 0.4],
-                color: [0.0, 1.0, 0.0],
-                mass: 1.0,
-                velocity: [0.0, 0.0, 0.0],
-                is_ball: 0.0,
-            },
-        ];
+        fn create_fabric_vertices(rows: usize, cols: usize, spacing: f32) -> Vec<Vertex> {
+            let mut vertices = Vec::new();
+            for i in 0..rows {
+                for j in 0..cols {
+                    vertices.push(Vertex {
+                        position: [
+                            -0.4 + j as f32 * spacing,
+                             0.2,
+                            -0.4 + i as f32 * spacing,
+                        ], // Center the fabric on top of the sphere
+                        color: [0.0, 1.0, 0.0], // Green color
+                        mass: 1.0,
+                        velocity: [0.0, 0.0, 0.0],
+                        is_ball: 0.0,
+                    });
+                }
+            }
+            vertices
+        }
+        
 
+        fn create_springs(
+            rows: usize,
+            cols: usize,
+            vertices: &Vec<Vertex>,
+            stiffness: f32,
+        ) -> Vec<Spring> {
+            let mut springs = Vec::new();
+        
+            for row in 0..rows {
+                for col in 0..cols {
+                    let index = row * cols + col;
+        
+                    // Structural springs
+                    if col < cols - 1 {
+                        let right = index + 1;
+                        springs.push(Spring {
+                            vertex_a: index,
+                            vertex_b: right,
+                            rest_length: (vertices[index].position[0] - vertices[right].position[0]).abs(),
+                            stiffness,
+                        });
+                    }
+                    if row < rows - 1 {
+                        let down = index + cols;
+                        springs.push(Spring {
+                            vertex_a: index,
+                            vertex_b: down,
+                            rest_length: (vertices[index].position[2] - vertices[down].position[2]).abs(),
+                            stiffness,
+                        });
+                    }
+        
+                    // Shear springs
+                    if col < cols - 1 && row < rows - 1 {
+                        let down_right = index + cols + 1;
+                        springs.push(Spring {
+                            vertex_a: index,
+                            vertex_b: down_right,
+                            rest_length: ((vertices[index].position[0] - vertices[down_right].position[0]).powi(2)
+                                + (vertices[index].position[2] - vertices[down_right].position[2]).powi(2))
+                            .sqrt(),
+                            stiffness,
+                        });
+                    }
+                    if col > 0 && row < rows - 1 {
+                        let down_left = index + cols - 1;
+                        springs.push(Spring {
+                            vertex_a: index,
+                            vertex_b: down_left,
+                            rest_length: ((vertices[index].position[0] - vertices[down_left].position[0]).powi(2)
+                                + (vertices[index].position[2] - vertices[down_left].position[2]).powi(2))
+                            .sqrt(),
+                            stiffness,
+                        });
+                    }
+        
+                    // Bend springs
+                    if col < cols - 2 {
+                        let two_right = index + 2;
+                        springs.push(Spring {
+                            vertex_a: index,
+                            vertex_b: two_right,
+                            rest_length: (vertices[index].position[0] - vertices[two_right].position[0]).abs(),
+                            stiffness,
+                        });
+                    }
+                    if row < rows - 2 {
+                        let two_down = index + 2 * cols;
+                        springs.push(Spring {
+                            vertex_a: index,
+                            vertex_b: two_down,
+                            rest_length: (vertices[index].position[2] - vertices[two_down].position[2]).abs(),
+                            stiffness,
+                        });
+                    }
+                }
+            }
+        
+            springs
+        }
+        
+        fn generate_fabric_indices(width_segments: usize, height_segments: usize) -> Vec<u32> {
+            let mut indices = Vec::new();
+            for row in 0..height_segments {
+                for col in 0..width_segments {
+                    let top_left = (row * (width_segments + 1) + col) as u32;
+                    let top_right = top_left + 1;
+                    let bottom_left = ((row + 1) * (width_segments + 1) + col) as u32;
+                    let bottom_right = bottom_left + 1;
+        
+                    // First triangle (top-left, bottom-left, top-right)
+                    indices.push(top_left);
+                    indices.push(bottom_left);
+                    indices.push(top_right);
+        
+                    // Second triangle (top-right, bottom-left, bottom-right)
+                    indices.push(top_right);
+                    indices.push(bottom_left);
+                    indices.push(bottom_right);
+                }
+            }
+            indices
+        }
+        
+        
+        let rows = 10;
+        let cols = 10;
+        let spacing = 0.1;
+        let stiffness = 100.0;
 
-        let square_indices = vec![0, 1, 2, 0, 2, 3];
+        // Generate fabric vertices and indices
+        let fabric_vertices = create_fabric_vertices(rows, cols, spacing);
+        let fabric_indices = generate_fabric_indices(cols - 1, rows - 1); // Use `cols - 1` and `rows - 1` for grid cells
 
-        // Combine ball and square vertices and indices
-        let mut vertices = ball_vertices.clone();
-        vertices.extend(square_vertices);
+        // Combine vertices and indices for rendering
+        let mut vertices = Vec::new();
+        vertices.extend(&ball_vertices); // Borrow instead of moving
+        vertices.extend(fabric_vertices);
+        
+        let mut indices = Vec::new();
+        indices.extend(ball_indices); // Borrow if possible
+        indices.extend(fabric_indices.iter().map(|i| *i as u32 + ball_vertices.len() as u32));
 
-        let mut indices = ball_indices;
-        indices.extend(square_indices.iter().map(|i| *i as u32 + ball_vertices.len() as u32));
+        println!("Total vertices: {}", vertices.len());
+        println!("Total indices: {}", indices.len());
 
         // Instances for square (initial position and downward velocity)
         let instances = vec![Instance {
@@ -280,12 +395,35 @@ impl App for InstanceApp {
         }
     }
 
-    fn update(&mut self, delta_time: f32, context: &wgpu_bootstrap::Context<'_>) {
-        // Update square's position with velocity
+    fn update(&mut self, delta_time: f32, _context: &wgpu_bootstrap::Context<'_>) {
         for instance in &mut self.instances {
-            instance.position[1] += instance.velocity[1] * delta_time;
+            // Skip sphere instances (is_ball == 1.0)
+            if instance.velocity[1] != 0.0 {
+                // Update position based on velocity
+                instance.position[1] += instance.velocity[1] * delta_time;
+    
+                // Apply gravity to fabric instances
+                instance.velocity[1] -= 0.8 * delta_time; // Gravity acceleration
+    
+                // Prevent falling below the ground (example: y = -1.0)
+                if instance.position[1] < -1.0 {
+                    instance.position[1] = -1.0;
+                    instance.velocity[1] = 0.0; // Stop moving when hitting the ground
+                }
+            }
         }
+    
+        // Update instance buffer to reflect changes
+        let instance_data: Vec<Instance> = self.instances.iter().cloned().collect();
+        self.instance_buffer = _context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
     }
+    
+    
+    
     
 
     fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
