@@ -4,7 +4,7 @@ use wgpu_bootstrap::{
         geometry::icosphere,
         orbit_camera::{CameraUniform, OrbitCamera},
     },
-    wgpu::{self, util::DeviceExt},
+    wgpu::{self, util::DeviceExt, ComputePass},
     App, Context,
 };
 
@@ -94,9 +94,11 @@ pub struct InstanceApp {
     fabric_vertex_buffer: wgpu::Buffer,
     fabric_index_buffer: wgpu::Buffer,
     render_pipeline: wgpu::RenderPipeline,
+    compute_pipeline: wgpu::ComputePipeline,
     num_sphere_indices: u32,
     num_fabric_indices: u32,
     camera: OrbitCamera,
+    compute_bind_group: wgpu::BindGroup,
 }
 
 impl InstanceApp {
@@ -195,7 +197,7 @@ impl InstanceApp {
         let fabric_vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fabric Vertex Buffer"),
             contents: bytemuck::cast_slice(&fabric_vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
         });
         
         let fabric_index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -210,8 +212,9 @@ impl InstanceApp {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let computeShader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor{
-            label: Some("ComputeShader"),
+        // Create the compute shader
+        let compute_shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Compute Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("computeShader.wgsl").into()),
         });
 
@@ -221,6 +224,50 @@ impl InstanceApp {
             label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[&camera_bind_group_layout],
             push_constant_ranges: &[],
+        });
+
+        // Bind group layout for the compute shader
+        let compute_bind_group_layout = context
+        .device()
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Compute Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let compute_bind_group = context.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Compute Bind Group"),
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: fabric_vertex_buffer.as_entire_binding(),
+                }
+            ],
+        });
+
+        // Create the compute pipeline
+        let compute_pipeline = context
+        .device()
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            module: &compute_shader,
+            entry_point: "main",
+            layout: Some(&context.device().create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Compute Pipeline Layout"),
+                bind_group_layouts: &[&compute_bind_group_layout],
+                push_constant_ranges: &[],
+            })),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+            label: Some("Compute Pipeline"),
         });
 
         // Create render pipeline
@@ -273,7 +320,8 @@ impl InstanceApp {
 
         // Camera setup
         let aspect = context.size().x / context.size().y;
-        let camera = OrbitCamera::new(context, 45.0, aspect, 0.1, 10.0);
+        let camera = OrbitCamera::new(context, 45.0, aspect, 0.1, 100.0);
+
 
         let num_sphere_indices = ball_indices.len() as u32;
         let num_fabric_indices = fabric_indices.len() as u32;
@@ -284,9 +332,11 @@ impl InstanceApp {
             fabric_vertex_buffer,
             fabric_index_buffer,
             render_pipeline,
+            compute_pipeline,
             num_sphere_indices,
             num_fabric_indices,
-            camera
+            camera,
+            compute_bind_group
         }
     }
 }
@@ -300,50 +350,48 @@ impl App for InstanceApp {
         }
     }
     
-    fn update(&mut self, delta_time: f32, context: &wgpu_bootstrap::Context<'_>) {
-        // Gravity update for fabric
-        const GRAVITY: f32 = 0.2;
+    fn update(&mut self, delta_time: f32, context: &Context) {
+        // Create a command encoder for compute dispatch
+        let mut encoder = context.device().create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Compute Encoder"),
+        });
     
-        // Get current fabric vertices
-        let mut fabric_vertices = vec![
-            Vertex {
-                position: [0.0, 0.0, 0.0],
-                color: [0.0, 0.0, 0.0],
-                mass: 0.0,
-                velocity: [0.0, 0.0, 0.0],
-                is_ball: 0.0,
-            };
-            (self.fabric_vertex_buffer.size() / std::mem::size_of::<Vertex>() as u64) as usize
-        ];
-    
-        // Update vertices with gravity simulation
-        for vertex in &mut fabric_vertices {
-            if vertex.is_ball == 0.0 { // Only update fabric vertices
-                vertex.velocity[1] -= GRAVITY * delta_time;
-                vertex.position[0] += vertex.velocity[0] * delta_time;
-                vertex.position[1] += vertex.velocity[1] * delta_time;
-                vertex.position[2] += vertex.velocity[2] * delta_time;
-            }
+        // Begin a compute pass
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass"),
+                timestamp_writes: None, 
+            });
+            
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
+            
+            // Dispatch workgroups (based on your fabric vertices count)
+            let work_group_count = (self.num_fabric_indices as u32 + 255) / 256;
+            compute_pass.dispatch_workgroups(work_group_count, 1, 1);
         }
     
-        // Update buffer with new vertex positions
-        context.queue().write_buffer(&self.fabric_vertex_buffer, 0, bytemuck::cast_slice(&fabric_vertices));
+        // Submit the compute commands
+        context.queue().submit(Some(encoder.finish()));
     }
     
     
 
-fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-    render_pass.set_pipeline(&self.render_pipeline);
-    render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
-
-    // Draw the sphere
-    render_pass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
-    render_pass.set_index_buffer(self.sphere_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-    render_pass.draw_indexed(0..self.num_sphere_indices, 0, 0..1);
-
-    // Draw the fabric
-    render_pass.set_vertex_buffer(0, self.fabric_vertex_buffer.slice(..));
-    render_pass.set_index_buffer(self.fabric_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-    render_pass.draw_indexed(0..self.num_fabric_indices, 0, 0..1);
-}
+    fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        // Set the render pipeline
+        render_pass.set_pipeline(&self.render_pipeline);
+        
+        // Set the camera bind group
+        render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
+    
+        // Draw the sphere
+        render_pass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.sphere_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.num_sphere_indices, 0, 0..1);
+    
+        // Draw the fabric
+        render_pass.set_vertex_buffer(0, self.fabric_vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.fabric_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.num_fabric_indices, 0, 0..1);
+    }
 }
