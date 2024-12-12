@@ -25,6 +25,16 @@ struct Instance {
     velocity: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Spring {
+    vertex_a: usize,
+    vertex_b: usize,
+    rest_length: f32,
+    stiffness: f32,
+}
+
+
 impl Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -96,14 +106,19 @@ pub struct InstanceApp {
     render_pipeline: wgpu::RenderPipeline,
     num_sphere_indices: u32,
     num_fabric_indices: u32,
+    num_instances: u32,
     camera: OrbitCamera,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
 }
 
 impl InstanceApp {
     pub fn new(context: &Context) -> Self {
+        
 
         let rows = 200;
         let cols = 200;
+        let stiffness = 100.0;
 
         let ball_radius = 0.2; // Adjust the ball radius as needed
         let (ball_positions, ball_indices) = icosphere(2);
@@ -119,6 +134,7 @@ impl InstanceApp {
             .collect();
         
         let fabric_vertices = create_fabric_vertices(rows, cols, ball_radius);
+
 
         fn create_fabric_vertices(rows: usize, cols: usize, ball_radius: f32) -> Vec<Vertex> {
             let mut vertices = Vec::new();
@@ -179,40 +195,47 @@ impl InstanceApp {
 
         println!("Total vertices: {}", vertices.len());
         println!("Total indices: {}", indices.len());
+
+        // Instances for (initial position and downward velocity)
+        let instances = vec![Instance {
+            position: [0.0, 0.0, 0.0],
+            velocity: [0.0, 0.0, 0.0],
+        }];
+
+        let instance_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: &[],
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        }); 
         
         let sphere_vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Vertex Buffer"),
             contents: bytemuck::cast_slice(&ball_vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::VERTEX,
         });
         
         let sphere_index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Index Buffer"),
             contents: bytemuck::cast_slice(&ball_indices),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDEX,
         });
         
         let fabric_vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fabric Vertex Buffer"),
             contents: bytemuck::cast_slice(&fabric_vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::VERTEX,
         });
         
         let fabric_index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fabric Index Buffer"),
             contents: bytemuck::cast_slice(&fabric_indices),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDEX,
         });
         
         // Shaders and pipeline
         let shader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
-
-        let computeShader = context.device().create_shader_module(wgpu::ShaderModuleDescriptor{
-            label: Some("ComputeShader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("computeShader.wgsl").into()),
         });
 
         let camera_bind_group_layout = context.device().create_bind_group_layout(&CameraUniform::desc());
@@ -225,51 +248,51 @@ impl InstanceApp {
 
         // Create render pipeline
         let render_pipeline =
-        context
-            .device()
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Render Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: "vs_main",
-                    buffers: &[Vertex::desc()], // Remove Instance::desc()
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: "fs_main",
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: context.format(),
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: context.depth_stencil_format(),
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-                cache: None,
-            });
+            context
+                .device()
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Render Pipeline"),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: "vs_main",
+                        buffers: &[Vertex::desc(), Instance::desc()],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: "fs_main",
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: context.format(),
+                            blend: Some(wgpu::BlendState::REPLACE),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,//Some(wgpu::Face::Back),
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        unclipped_depth: false,
+                        conservative: false,
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: context.depth_stencil_format(),
+                        depth_write_enabled: true,
+                        depth_compare: wgpu::CompareFunction::Less,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: 1,
+                        mask: !0,
+                        alpha_to_coverage_enabled: false,
+                    },
+                    multiview: None,
+                    cache: None,
+                });
 
         // Camera setup
         let aspect = context.size().x / context.size().y;
@@ -286,8 +309,12 @@ impl InstanceApp {
             render_pipeline,
             num_sphere_indices,
             num_fabric_indices,
-            camera
+            num_instances: instances.len() as u32,
+            camera,
+            instances,
+            instance_buffer,
         }
+        
     }
 }
 
@@ -301,54 +328,51 @@ impl App for InstanceApp {
         }
     }
 
-    fn update(&mut self, delta_time: f32, context: &wgpu_bootstrap::Context<'_>) {
-        // Gravity constant
-        const GRAVITY: f32 = 0.2;
-    
-        // Update vertex positions based on their velocity
-        let mut fabric_vertices = vec![
-            Vertex {
-                position: [0.0, 0.0, 0.0],
-                color: [0.0, 0.0, 0.0],
-                mass: 0.0,
-                velocity: [0.0, 0.0, 0.0],
-                is_ball: 0.0,
-            };
-            (self.fabric_vertex_buffer.size() / std::mem::size_of::<Vertex>() as u64) as usize
-        ];
-        context.queue().write_buffer(&self.fabric_vertex_buffer, 0, bytemuck::cast_slice(&fabric_vertices));
-    
-        // Simple gravity-based falling mechanism
-        for vertex in &mut fabric_vertices {
-            // Only update non-ball vertices (is_ball == 0.0)
-            if vertex.is_ball == 0.0 {
-                // Apply gravity to velocity
-                vertex.velocity[1] -= GRAVITY * delta_time;
-    
+    fn update(&mut self, delta_time: f32, _context: &wgpu_bootstrap::Context<'_>) {
+        for instance in &mut self.instances {
+            //println!("instance.velocity = {}", instance.velocity[1]);
+
+            if instance.velocity[1] != 0.0 {
+                println!("instance.velocity = {}", instance.velocity[1]);
+
                 // Update position based on velocity
-                vertex.position[0] += vertex.velocity[0] * delta_time;
-                vertex.position[1] += vertex.velocity[1] * delta_time;
-                vertex.position[2] += vertex.velocity[2] * delta_time;
+                instance.position[1] += instance.velocity[1] * delta_time;
+    
+                // Apply gravity to fabric instances
+                instance.velocity[1] -= 0.8 * delta_time; // Gravity acceleration
+    
+                // Prevent falling below the ground (example: y = -1.0)
+                if instance.position[1] < -1.0 {
+                    instance.position[1] = -1.0;
+                    instance.velocity[1] = 0.0; // Stop moving when hitting the ground
+                }
             }
         }
-    
-        // Write updated vertices back to the buffer
-        context.queue().write_buffer(&self.fabric_vertex_buffer, 0, bytemuck::cast_slice(&fabric_vertices));
+        let instance_data: Vec<Instance> = self.instances.iter().cloned().collect();
+        self.instance_buffer = _context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
     }
     
 
-fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
-    render_pass.set_pipeline(&self.render_pipeline);
-    render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
+    fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, self.camera.bind_group(), &[]);
+    
+        // Draw the sphere
+        render_pass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-    // Draw the sphere
-    render_pass.set_vertex_buffer(0, self.sphere_vertex_buffer.slice(..));
-    render_pass.set_index_buffer(self.sphere_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-    render_pass.draw_indexed(0..self.num_sphere_indices, 0, 0..1);
+        render_pass.set_index_buffer(self.sphere_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.num_sphere_indices, 0, 0..self.num_instances);
+    
+        // Draw the fabric
+        render_pass.set_vertex_buffer(0, self.fabric_vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-    // Draw the fabric
-    render_pass.set_vertex_buffer(0, self.fabric_vertex_buffer.slice(..));
-    render_pass.set_index_buffer(self.fabric_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-    render_pass.draw_indexed(0..self.num_fabric_indices, 0, 0..1);
-}
+        render_pass.set_index_buffer(self.fabric_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..self.num_fabric_indices, 0, 0..self.num_instances);
+    }
 }
