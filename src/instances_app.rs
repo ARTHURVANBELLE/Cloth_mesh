@@ -294,18 +294,17 @@ impl InstanceApp {
 impl App for InstanceApp {
     fn input(&mut self, input: egui::InputState, context: &Context) {
         self.camera.input(input.clone(), context);
-
         if input.raw_scroll_delta.y != 0.0 {
             let new_radius = (self.camera.radius() - input.raw_scroll_delta.y).max(0.1).min(500.0);
             self.camera.set_radius(new_radius).update(context);
         }
     }
-
+    
     fn update(&mut self, delta_time: f32, context: &wgpu_bootstrap::Context<'_>) {
-        // Gravity constant
+        // Gravity update for fabric
         const GRAVITY: f32 = 0.2;
     
-        // Update vertex positions based on their velocity
+        // Get current fabric vertices
         let mut fabric_vertices = vec![
             Vertex {
                 position: [0.0, 0.0, 0.0],
@@ -316,25 +315,21 @@ impl App for InstanceApp {
             };
             (self.fabric_vertex_buffer.size() / std::mem::size_of::<Vertex>() as u64) as usize
         ];
-        context.queue().write_buffer(&self.fabric_vertex_buffer, 0, bytemuck::cast_slice(&fabric_vertices));
     
-        // Simple gravity-based falling mechanism
+        // Update vertices with gravity simulation
         for vertex in &mut fabric_vertices {
-            // Only update non-ball vertices (is_ball == 0.0)
-            if vertex.is_ball == 0.0 {
-                // Apply gravity to velocity
+            if vertex.is_ball == 0.0 { // Only update fabric vertices
                 vertex.velocity[1] -= GRAVITY * delta_time;
-    
-                // Update position based on velocity
                 vertex.position[0] += vertex.velocity[0] * delta_time;
                 vertex.position[1] += vertex.velocity[1] * delta_time;
                 vertex.position[2] += vertex.velocity[2] * delta_time;
             }
         }
     
-        // Write updated vertices back to the buffer
+        // Update buffer with new vertex positions
         context.queue().write_buffer(&self.fabric_vertex_buffer, 0, bytemuck::cast_slice(&fabric_vertices));
     }
+    
     
 
 fn render(&self, render_pass: &mut wgpu::RenderPass<'_>) {
