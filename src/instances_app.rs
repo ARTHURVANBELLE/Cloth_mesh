@@ -25,6 +25,24 @@ struct Instance {
     velocity: [f32; 4], // Changed to vec4
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct SphereData {
+    center: [f32; 4],  // 16 bytes
+    radius: f32,       // 4 bytes
+    _padding: [f32; 7],  // 12 bytes of padding to make it 32-byte aligned
+}
+
+impl SphereData {
+    fn new(center: [f32; 3], radius: f32) -> Self {
+        Self {
+            center: [center[0], center[1], center[2], 0.0],
+            radius,
+            _padding: [0.0; 7],
+        }
+    }
+}
+
 impl Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -46,21 +64,21 @@ impl Vertex {
                 // Location 2: Mass
                 wgpu::VertexAttribute {
                     offset: (std::mem::size_of::<[f32; 4]>()
-                        + std::mem::size_of::<[f32; 3]>()) as wgpu::BufferAddress,
+                        + std::mem::size_of::<[f32; 4]>()) as wgpu::BufferAddress,
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32,
                 },
                 // Location 3: Velocity
                 wgpu::VertexAttribute {
                     offset: (std::mem::size_of::<[f32; 4]>() * 2
-                        + std::mem::size_of::<[f32; 3]>()) as wgpu::BufferAddress,
+                        + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
                     shader_location: 3,
                     format: wgpu::VertexFormat::Float32x4, // Updated
                 },
                 // Location 4: is_ball
                 wgpu::VertexAttribute {
                     offset: (std::mem::size_of::<[f32; 4]>() * 2
-                        + std::mem::size_of::<[f32; 3]>()
+                        + std::mem::size_of::<[f32; 4]>()
                         + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
                     shader_location: 4,
                     format: wgpu::VertexFormat::Float32,
@@ -103,6 +121,7 @@ pub struct InstanceApp {
     num_fabric_indices: u32,
     camera: OrbitCamera,
     compute_bind_group: wgpu::BindGroup,
+    sphere_buffer: wgpu::Buffer,
 }
 
 impl InstanceApp {
@@ -111,15 +130,15 @@ impl InstanceApp {
         let rows = 200;
         let cols = 200;
 
-        let ball_radius = 0.2; // Adjust the ball radius as needed
+        let ball_radius = 1.2; // Adjust the ball radius as needed
         let (ball_positions, ball_indices) = icosphere(2);
         let ball_vertices: Vec<Vertex> = ball_positions
             .iter()
             .map(|position| Vertex {
                 position: [position.x * ball_radius, position.y * ball_radius, position.z * ball_radius, 1.0],
-                color: [1.0, 0.0, 0.0, 0.0], // Red for the ball
+                color: [1.0, 0.0, 0.0, 1.0], // Red for the ball
                 mass: 1.0,
-                velocity: [0.0, 0.0, 0.0, 0.0],
+                velocity: [0.0, 0.0, 0.0, 1.0],
                 is_ball: 1.0,
             })
             .collect();
@@ -128,7 +147,7 @@ impl InstanceApp {
 
         fn create_fabric_vertices(rows: usize, cols: usize, ball_radius: f32) -> Vec<Vertex> {
             let mut vertices = Vec::new();
-            let spacing = 4.0 * ball_radius / cols as f32;
+            let spacing = 1.2 * ball_radius / cols as f32;
             let y = ball_radius + spacing * rows as f32 / 2.0; // Center fabric above the sphere
         
             for i in 0..rows {
@@ -137,9 +156,9 @@ impl InstanceApp {
                     let z = -spacing * (rows as f32 - 1.0) / 2.0 + i as f32 * spacing;
                     vertices.push(Vertex {
                         position: [x, y, z, 0.0],
-                        color: [0.0, 1.0, 0.0, 0.0], // Green
+                        color: [0.0, 1.0, 0.0, 1.0], // Green
                         mass: 1.0,
-                        velocity: [0.0, -0.1, 0.0, 0.0],
+                        velocity: [0.0, -0.1, 0.0, 1.0],
                         is_ball: 0.0,
                     });
                 }
@@ -185,29 +204,37 @@ impl InstanceApp {
 
         println!("Total vertices: {}", vertices.len());
         println!("Total indices: {}", indices.len());
+
+        let sphere_data = SphereData::new([0.0, 0.0, 0.0], ball_radius); // Use your ball_radius
+        let sphere_buffer = context.device().create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("Sphere Buffer"),
+            contents: bytemuck::cast_slice(&[sphere_data]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         
         let sphere_vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Vertex Buffer"),
             contents: bytemuck::cast_slice(&ball_vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
         });
         
         let sphere_index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Index Buffer"),
             contents: bytemuck::cast_slice(&ball_indices),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
         });
         
         let fabric_vertex_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fabric Vertex Buffer"),
             contents: bytemuck::cast_slice(&fabric_vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::VERTEX,
         });
         
         let fabric_index_buffer = context.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fabric Index Buffer"),
             contents: bytemuck::cast_slice(&fabric_indices),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE| wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX,
         });
         
         // Shaders and pipeline
@@ -235,16 +262,28 @@ impl InstanceApp {
         .device()
         .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Compute Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let compute_bind_group = context.device().create_bind_group(&wgpu::BindGroupDescriptor {
@@ -254,9 +293,15 @@ impl InstanceApp {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: fabric_vertex_buffer.as_entire_binding(),
-                }
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: sphere_buffer.as_entire_binding(),
+                },
             ],
         });
+        
+        
 
         // Create the compute pipeline
         let compute_pipeline = context
@@ -340,7 +385,8 @@ impl InstanceApp {
             num_sphere_indices,
             num_fabric_indices,
             camera,
-            compute_bind_group
+            compute_bind_group,
+            sphere_buffer,
         }
     }
 }
