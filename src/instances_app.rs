@@ -11,18 +11,18 @@ use wgpu_bootstrap::{
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
+    position: [f32; 4], // Changed to vec4
+    color: [f32; 4],
     mass: f32,
-    velocity: [f32; 3],
+    velocity: [f32; 4], // Changed to vec4
     is_ball: f32,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
-    position: [f32; 3],
-    velocity: [f32; 3],
+    position: [f32; 4], // Changed to vec4
+    velocity: [f32; 4], // Changed to vec4
 }
 
 impl Vertex {
@@ -35,29 +35,33 @@ impl Vertex {
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4, // Updated
                 },
                 // Location 1: Color
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
                 // Location 2: Mass
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: (std::mem::size_of::<[f32; 4]>()
+                        + std::mem::size_of::<[f32; 3]>()) as wgpu::BufferAddress,
                     shader_location: 2,
                     format: wgpu::VertexFormat::Float32,
                 },
                 // Location 3: Velocity
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+                    offset: (std::mem::size_of::<[f32; 4]>() * 2
+                        + std::mem::size_of::<[f32; 3]>()) as wgpu::BufferAddress,
                     shader_location: 3,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4, // Updated
                 },
                 // Location 4: is_ball
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() * 2 + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+                    offset: (std::mem::size_of::<[f32; 4]>() * 2
+                        + std::mem::size_of::<[f32; 3]>()
+                        + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
                     shader_location: 4,
                     format: wgpu::VertexFormat::Float32,
                 },
@@ -65,7 +69,6 @@ impl Vertex {
         }
     }
 }
-
 
 impl Instance {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -76,17 +79,18 @@ impl Instance {
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 5,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4, // Updated
                 },
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: std::mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
                     shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4, // Updated
                 },
             ],
         }
     }
 }
+
 
 pub struct InstanceApp {
     sphere_vertex_buffer: wgpu::Buffer,
@@ -112,10 +116,10 @@ impl InstanceApp {
         let ball_vertices: Vec<Vertex> = ball_positions
             .iter()
             .map(|position| Vertex {
-                position: (*position * ball_radius).into(),
-                color: [1.0, 0.0, 0.0], // Red for the ball
+                position: [position.x * ball_radius, position.y * ball_radius, position.z * ball_radius, 1.0],
+                color: [1.0, 0.0, 0.0, 0.0], // Red for the ball
                 mass: 1.0,
-                velocity: [0.0, 0.0, 0.0],
+                velocity: [0.0, 0.0, 0.0, 0.0],
                 is_ball: 1.0,
             })
             .collect();
@@ -132,10 +136,10 @@ impl InstanceApp {
                     let x = -spacing * (cols as f32 - 1.0) / 2.0 + j as f32 * spacing;
                     let z = -spacing * (rows as f32 - 1.0) / 2.0 + i as f32 * spacing;
                     vertices.push(Vertex {
-                        position: [x, y, z],
-                        color: [0.0, 1.0, 0.0], // Green
+                        position: [x, y, z, 0.0],
+                        color: [0.0, 1.0, 0.0, 0.0], // Green
                         mass: 1.0,
-                        velocity: [0.0, -0.1, 0.0],
+                        velocity: [0.0, -0.1, 0.0, 0.0],
                         is_ball: 0.0,
                     });
                 }
